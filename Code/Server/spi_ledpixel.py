@@ -1,82 +1,154 @@
-# Import necessary modules
+"""
+SPI LED Pixel driver for WS2812B RGB LEDs.
+Optimized for Pi 4 with 12MHz SPI speed for smoother animations.
+"""
+
 import spidev
 import numpy
+from typing import List, Optional
 
-# Define the Freenove_SPI_LedPixel class
+from config import get_config
+from logger import get_logger
+
+logger = get_logger()
+
+
 class Freenove_SPI_LedPixel(object):
-    def __init__(self, count=8, bright=255, sequence='GRB', bus=0, device=0):
-        # Initialize LED type
+    """
+    WS2812B LED controller using SPI interface.
+    Supports RGB color control and various animation effects.
+    """
+
+    def __init__(
+        self,
+        count: int = 8,
+        bright: int = 255,
+        sequence: str = 'GRB',
+        bus: int = 0,
+        device: int = 0
+    ):
+        """
+        Initialize LED pixel controller.
+
+        Args:
+            count: Number of LEDs in strip
+            bright: Default brightness (0-255)
+            sequence: Color sequence (RGB, GRB, etc.)
+            bus: SPI bus number
+            device: SPI device number
+        """
+        self.config = get_config()
+
+        # Initialize LED parameters
         self.set_led_type(sequence)
-        # Set the number of LEDs
         self.set_led_count(count)
-        # Set the brightness of the LEDs
         self.set_led_brightness(bright)
-        # Initialize the SPI connection
+
+        # Initialize SPI connection
         self.led_begin(bus, device)
+
         # Set all LEDs to off
         self.set_all_led_color(0, 0, 0)
-       
-    def led_begin(self, bus=0, device=0):
-        # Store the bus and device numbers
+
+    def led_begin(self, bus: int = 0, device: int = 0) -> None:
+        """
+        Initialize SPI connection.
+
+        Args:
+            bus: SPI bus number
+            device: SPI device number
+        """
         self.bus = bus
         self.device = device
+
         try:
-            # Initialize the SPI device
+            # Initialize SPI device
             self.spi = spidev.SpiDev()
             self.spi.open(self.bus, self.device)
             self.spi.mode = 0
-            # Set initialization state to success
+
+            # Set SPI speed - optimized for Pi 4
+            # Using 12 MHz for faster LED updates
+            self.spi.max_speed_hz = self.config.led.spi_speed_hz
+            logger.info(
+                f"SPI LED initialized on bus {bus}, device {device} "
+                f"at {self.config.led.spi_speed_hz / 1e6:.1f} MHz"
+            )
+
             self.led_init_state = 1
-        except OSError:
-            # Handle SPI initialization errors
-            print("Please check the configuration in /boot/firmware/config.txt.")
+
+        except OSError as e:
+            logger.error(f"SPI initialization failed: {e}")
+            logger.error("Check /boot/firmware/config.txt configuration")
+
             if self.bus == 0:
-                print("You can turn on the 'SPI' in 'Interface Options' by using 'sudo raspi-config'.")
-                print("Or make sure that 'dtparam=spi=on' is not commented, then reboot the Raspberry Pi. Otherwise spi0 will not be available.")
+                logger.error(
+                    "Enable SPI in 'sudo raspi-config' -> Interface Options, "
+                    "or ensure 'dtparam=spi=on' in config.txt"
+                )
             else:
-                print("Please add 'dtoverlay=spi{}-2cs' at the bottom of the /boot/firmware/config.txt, then reboot the Raspberry Pi. Otherwise spi{} will not be available.".format(self.bus, self.bus))
-            # Set initialization state to failure
+                logger.error(
+                    f"Add 'dtoverlay=spi{self.bus}-2cs' to /boot/firmware/config.txt "
+                    f"to enable SPI{self.bus}"
+                )
+
             self.led_init_state = 0
-            
-    def check_spi_state(self):
-        # Return the current SPI initialization state
+
+    def check_spi_state(self) -> int:
+        """Return the current SPI initialization state."""
         return self.led_init_state
-        
-    def spi_gpio_info(self):
-        # Print the GPIO pin information for the specified SPI bus
-        if self.bus == 0:
-            print("SPI0-MOSI: GPIO10(WS2812-PIN)  SPI0-MISO: GPIO9  SPI0-SCLK: GPIO11  SPI0-CE0: GPIO8  SPI0-CE1: GPIO7")
-        elif self.bus == 1:
-            print("SPI1-MOSI: GPIO20(WS2812-PIN)   SPI1-MISO: GPIO19  SPI1-SCLK: GPIO21  SPI1-CE0: GPIO18  SPI1-CE1: GPIO17  SPI0-CE1: GPIO16")
-        elif self.bus == 2:
-            print("SPI2-MOSI: GPIO41(WS2812-PIN)   SPI2-MISO: GPIO40  SPI2-SCLK: GPIO42  SPI2-CE0: GPIO43  SPI2-CE1: GPIO44  SPI2-CE1: GPIO45")
-        elif self.bus == 3:
-            print("SPI3-MOSI: GPIO2(WS2812-PIN)  SPI3-MISO: GPIO1  SPI3-SCLK: GPIO3  SPI3-CE0: GPIO0  SPI3-CE1: GPIO24")
-        elif self.bus == 4:
-            print("SPI4-MOSI: GPIO6(WS2812-PIN)  SPI4-MISO: GPIO5  SPI4-SCLK: GPIO7  SPI4-CE0: GPIO4  SPI4-CE1: GPIO25")
-        elif self.bus == 5:
-            print("SPI5-MOSI: GPIO14(WS2812-PIN)  SPI5-MISO: GPIO13  SPI5-SCLK: GPIO15  SPI5-CE0: GPIO12  SPI5-CE1: GPIO26")
-        elif self.bus == 6:
-            print("SPI6-MOSI: GPIO20(WS2812-PIN)  SPI6-MISO: GPIO19  SPI6-SCLK: GPIO21  SPI6-CE0: GPIO18  SPI6-CE1: GPIO27")
-    
-    def led_close(self):
-        # Turn off all LEDs and close the SPI connection
-        self.set_all_led_rgb([0, 0, 0])
-        self.spi.close()
-    
-    def set_led_count(self, count):
-        # Set the number of LEDs
+
+    def spi_gpio_info(self) -> None:
+        """Print GPIO pin information for the specified SPI bus."""
+        gpio_info = {
+            0: "SPI0-MOSI: GPIO10(WS2812-PIN)  SPI0-MISO: GPIO9  SPI0-SCLK: GPIO11  SPI0-CE0: GPIO8  SPI0-CE1: GPIO7",
+            1: "SPI1-MOSI: GPIO20(WS2812-PIN)  SPI1-MISO: GPIO19  SPI1-SCLK: GPIO21  SPI1-CE0: GPIO18  SPI1-CE1: GPIO17  SPI0-CE1: GPIO16",
+            2: "SPI2-MOSI: GPIO41(WS2812-PIN)  SPI2-MISO: GPIO40  SPI2-SCLK: GPIO42  SPI2-CE0: GPIO43  SPI2-CE1: GPIO44  SPI2-CE1: GPIO45",
+            3: "SPI3-MOSI: GPIO2(WS2812-PIN)  SPI3-MISO: GPIO1  SPI3-SCLK: GPIO3  SPI3-CE0: GPIO0  SPI3-CE1: GPIO24",
+            4: "SPI4-MOSI: GPIO6(WS2812-PIN)  SPI4-MISO: GPIO5  SPI4-SCLK: GPIO7  SPI4-CE0: GPIO4  SPI4-CE1: GPIO25",
+            5: "SPI5-MOSI: GPIO14(WS2812-PIN)  SPI5-MISO: GPIO13  SPI5-SCLK: GPIO15  SPI5-CE0: GPIO12  SPI5-CE1: GPIO26",
+            6: "SPI6-MOSI: GPIO20(WS2812-PIN)  SPI6-MISO: GPIO19  SPI6-SCLK: GPIO21  SPI6-CE0: GPIO18  SPI6-CE1: GPIO27"
+        }
+        if self.bus in gpio_info:
+            logger.info(gpio_info[self.bus])
+        else:
+            logger.warning(f"Unknown SPI bus: {self.bus}")
+
+    def led_close(self) -> None:
+        """Turn off all LEDs and close SPI connection."""
+        try:
+            self.set_all_led_rgb([0, 0, 0])
+            self.spi.close()
+            logger.info("SPI LED closed")
+        except Exception as e:
+            logger.warning(f"Error closing SPI: {e}")
+
+    def set_led_count(self, count: int) -> None:
+        """
+        Set the number of LEDs.
+
+        Args:
+            count: Number of LEDs
+        """
         self.led_count = count
-        # Initialize the color arrays
+        # Initialize color arrays
         self.led_color = [0, 0, 0] * self.led_count
         self.led_original_color = [0, 0, 0] * self.led_count
-    
-    def get_led_count(self):
-        # Return the number of LEDs
+
+    def get_led_count(self) -> int:
+        """Return the number of LEDs."""
         return self.led_count
-        
-    def set_led_type(self, rgb_type):
-        # Set the LED color sequence (RGB, GRB, etc.)
+
+    def set_led_type(self, rgb_type: str) -> int:
+        """
+        Set the LED color sequence (RGB, GRB, etc.).
+
+        Args:
+            rgb_type: Color sequence string
+
+        Returns:
+            Index of sequence or -1 if invalid
+        """
         try:
             led_type = ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR']
             led_type_offset = [0x06, 0x09, 0x12, 0x21, 0x18, 0x24]
@@ -86,103 +158,154 @@ class Freenove_SPI_LedPixel(object):
             self.led_blue_offset = (led_type_offset[index] >> 0) & 0x03
             return index
         except ValueError:
+            # Default to GRB
             self.led_red_offset = 1
             self.led_green_offset = 0
             self.led_blue_offset = 2
+            logger.warning(f"Invalid LED type '{rgb_type}', using GRB")
             return -1
-    
-    def set_led_brightness(self, brightness):
-        # Set the brightness of all LEDs
-        self.led_brightness = brightness
+
+    def set_led_brightness(self, brightness: int) -> None:
+        """
+        Set the brightness of all LEDs.
+
+        Args:
+            brightness: Brightness value (0-255)
+        """
+        self.led_brightness = max(0, min(255, brightness))
         for i in range(self.get_led_count()):
             self.set_led_rgb_data(i, self.led_original_color)
-            
-    def set_ledpixel(self, index, r, g, b):
-        # Set the color of a specific LED
+
+    def set_ledpixel(self, index: int, r: int, g: int, b: int) -> None:
+        """
+        Set the color of a specific LED.
+
+        Args:
+            index: LED index
+            r: Red value (0-255)
+            g: Green value (0-255)
+            b: Blue value (0-255)
+        """
         p = [0, 0, 0]
         p[self.led_red_offset] = round(r * self.led_brightness / 255)
         p[self.led_green_offset] = round(g * self.led_brightness / 255)
         p[self.led_blue_offset] = round(b * self.led_brightness / 255)
+
         self.led_original_color[index * 3 + self.led_red_offset] = r
         self.led_original_color[index * 3 + self.led_green_offset] = g
         self.led_original_color[index * 3 + self.led_blue_offset] = b
+
         for i in range(3):
             self.led_color[index * 3 + i] = p[i]
 
-    def set_led_color_data(self, index, r, g, b):
-        # Set the color data of a specific LED
-        self.set_ledpixel(index, r, g, b)  
-        
-    def set_led_rgb_data(self, index, color):
-        # Set the RGB data of a specific LED
-        self.set_ledpixel(index, color[0], color[1], color[2])   
-        
-    def set_led_color(self, index, r, g, b):
-        # Set the color of a specific LED and update the display
+    def set_led_color_data(self, index: int, r: int, g: int, b: int) -> None:
+        """Set the color data of a specific LED."""
         self.set_ledpixel(index, r, g, b)
-        self.show() 
-        
-    def set_led_rgb(self, index, color):
-        # Set the RGB color of a specific LED and update the display
-        self.set_led_rgb_data(index, color)   
-        self.show() 
-    
-    def set_all_led_color_data(self, r, g, b):
-        # Set the color data of all LEDs
+
+    def set_led_rgb_data(self, index: int, color: List[int]) -> None:
+        """Set the RGB data of a specific LED."""
+        self.set_ledpixel(index, color[0], color[1], color[2])
+
+    def set_led_color(self, index: int, r: int, g: int, b: int) -> None:
+        """Set the color of a specific LED and update the display."""
+        self.set_ledpixel(index, r, g, b)
+        self.show()
+
+    def set_led_rgb(self, index: int, color: List[int]) -> None:
+        """Set the RGB color of a specific LED and update the display."""
+        self.set_led_rgb_data(index, color)
+        self.show()
+
+    def set_all_led_color_data(self, r: int, g: int, b: int) -> None:
+        """Set the color data of all LEDs."""
         for i in range(self.get_led_count()):
             self.set_led_color_data(i, r, g, b)
-            
-    def set_all_led_rgb_data(self, color):
-        # Set the RGB data of all LEDs
+
+    def set_all_led_rgb_data(self, color: List[int]) -> None:
+        """Set the RGB data of all LEDs."""
         for i in range(self.get_led_count()):
-            self.set_led_rgb_data(i, color)   
-        
-    def set_all_led_color(self, r, g, b):
-        # Set the color of all LEDs and update the display
+            self.set_led_rgb_data(i, color)
+
+    def set_all_led_color(self, r: int, g: int, b: int) -> None:
+        """Set the color of all LEDs and update the display."""
         for i in range(self.get_led_count()):
             self.set_led_color_data(i, r, g, b)
         self.show()
-        
-    def set_all_led_rgb(self, color):
-        # Set the RGB color of all LEDs and update the display
+
+    def set_all_led_rgb(self, color: List[int]) -> None:
+        """Set the RGB color of all LEDs and update the display."""
         for i in range(self.get_led_count()):
-            self.set_led_rgb_data(i, color) 
+            self.set_led_rgb_data(i, color)
         self.show()
-    
-    def write_ws2812_numpy8(self):
-        # Convert the color data to a format suitable for WS2812 LEDs
-        d = numpy.array(self.led_color).ravel()        # Convert data into a one-dimensional array
-        tx = numpy.zeros(len(d) * 8, dtype=numpy.uint8)  # Each RGB color has 8 bits, each represented by a uint8 type data
-        for ibit in range(8):                          # Convert each bit of data to the data that the SPI will send
-            tx[7 - ibit::8] = ((d >> ibit) & 1) * 0x78 + 0x80   # T0H=1,T0L=7, T1H=5,T1L=3   #0b11111000 mean T1(0.78125us), 0b10000000 mean T0(0.15625us)  
+
+    def write_ws2812_numpy8(self) -> None:
+        """
+        Convert color data to WS2812 format and send via SPI.
+        Uses 8-bit encoding for accurate timing.
+        """
+        # Convert data into one-dimensional array
+        d = numpy.array(self.led_color).ravel()
+
+        # Each RGB color has 8 bits, each represented by a uint8 type data
+        tx = numpy.zeros(len(d) * 8, dtype=numpy.uint8)
+
+        # Convert each bit to SPI data
+        # T0H=1,T0L=7, T1H=5,T1L=3
+        # 0b11111000 = T1 (0.78125us), 0b10000000 = T0 (0.15625us)
+        for ibit in range(8):
+            tx[7 - ibit::8] = ((d >> ibit) & 1) * 0x78 + 0x80
+
         if self.led_init_state != 0:
-            if self.bus == 0:
-                self.spi.xfer(tx.tolist(), int(8 / 1.25e-6))         # Send color data at a frequency of 6.4Mhz
-            else:
-                self.spi.xfer(tx.tolist(), int(8 / 1.0e-6))          # Send color data at a frequency of 8Mhz
-        
-    def write_ws2812_numpy4(self):
-        # Convert the color data to a format suitable for WS2812 LEDs (4-bit mode)
+            try:
+                # Send at configured SPI speed (12 MHz for Pi 4)
+                # Speed is now set via max_speed_hz in led_begin()
+                self.spi.xfer(tx.tolist())
+            except OSError as e:
+                logger.error(f"SPI transfer error: {e}")
+
+    def write_ws2812_numpy4(self) -> None:
+        """
+        Convert color data to WS2812 format using 4-bit encoding.
+        Faster but less precise than 8-bit mode.
+        """
         d = numpy.array(self.led_color).ravel()
         tx = numpy.zeros(len(d) * 4, dtype=numpy.uint8)
+
         for ibit in range(4):
-            tx[3 - ibit::4] = ((d >> (2 * ibit + 1)) & 1) * 0x60 + ((d >> (2 * ibit + 0)) & 1) * 0x06 + 0x88  
+            tx[3 - ibit::4] = (
+                ((d >> (2 * ibit + 1)) & 1) * 0x60 +
+                ((d >> (2 * ibit + 0)) & 1) * 0x06 + 0x88
+            )
+
         if self.led_init_state != 0:
-            if self.bus == 0:
-                self.spi.xfer(tx.tolist(), int(4 / 1.25e-6))         
-            else:
-                self.spi.xfer(tx.tolist(), int(4 / 1.0e-6))       
-        
-    def show(self, mode=1):
-        # Update the display with the current color data
+            try:
+                self.spi.xfer(tx.tolist())
+            except OSError as e:
+                logger.error(f"SPI transfer error: {e}")
+
+    def show(self, mode: int = 1) -> None:
+        """
+        Update the display with the current color data.
+
+        Args:
+            mode: 1 for 8-bit mode, 0 for 4-bit mode
+        """
         if mode == 1:
             write_ws2812 = self.write_ws2812_numpy8
         else:
             write_ws2812 = self.write_ws2812_numpy4
         write_ws2812()
-        
-    def wheel(self, pos):
-        # Generate a color based on the position in the color wheel
+
+    def wheel(self, pos: int) -> List[int]:
+        """
+        Generate a color based on position in color wheel.
+
+        Args:
+            pos: Position (0-255)
+
+        Returns:
+            [R, G, B] color values
+        """
         if pos < 85:
             return [(255 - pos * 3), (pos * 3), 0]
         elif pos < 170:
@@ -191,109 +314,120 @@ class Freenove_SPI_LedPixel(object):
         else:
             pos = pos - 170
             return [(pos * 3), 0, (255 - pos * 3)]
-    
-    def hsv2rgb(self, h, s, v):
-        # Convert HSV to RGB
+
+    def hsv2rgb(self, h: int, s: int, v: int) -> List[int]:
+        """
+        Convert HSV to RGB.
+
+        Args:
+            h: Hue (0-360)
+            s: Saturation (0-100)
+            v: Value (0-100)
+
+        Returns:
+            [R, G, B] color values
+        """
         h = h % 360
         rgb_max = round(v * 2.55)
         rgb_min = round(rgb_max * (100 - s) / 100)
         i = round(h / 60)
         diff = round(h % 60)
         rgb_adj = round((rgb_max - rgb_min) * diff / 60)
+
         if i == 0:
-            r = rgb_max
-            g = rgb_min + rgb_adj
-            b = rgb_min
+            r, g, b = rgb_max, rgb_min + rgb_adj, rgb_min
         elif i == 1:
-            r = rgb_max - rgb_adj
-            g = rgb_max
-            b = rgb_min
+            r, g, b = rgb_max - rgb_adj, rgb_max, rgb_min
         elif i == 2:
-            r = rgb_min
-            g = rgb_max
-            b = rgb_min + rgb_adj
+            r, g, b = rgb_min, rgb_max, rgb_min + rgb_adj
         elif i == 3:
-            r = rgb_min
-            g = rgb_max - rgb_adj
-            b = rgb_max
+            r, g, b = rgb_min, rgb_max - rgb_adj, rgb_max
         elif i == 4:
-            r = rgb_min + rgb_adj
-            g = rgb_min
-            b = rgb_max
+            r, g, b = rgb_min + rgb_adj, rgb_min, rgb_max
         else:
-            r = rgb_max
-            g = rgb_min
-            b = rgb_max - rgb_adj
+            r, g, b = rgb_max, rgb_min, rgb_max - rgb_adj
+
         return [r, g, b]
-    
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - cleanup resources."""
+        self.led_close()
+        return False
+
+
 if __name__ == '__main__':
     import time
     import os
-    # Print the version of the spidev module
-    print("spidev version is ", spidev.__version__)
-    # Print the available SPI devices
-    print("spidev device as show:")
+    from logger import setup_logger
+
+    setup_logger(log_level='INFO')
+
+    logger.info(f"spidev version: {spidev.__version__}")
+    logger.info("Available SPI devices:")
     os.system("ls /dev/spi*")
-    
-    # Create an instance of Freenove_SPI_LedPixel with 8 LEDs and maximum brightness
-    led = Freenove_SPI_LedPixel(8, 255)              # Use MOSI for /dev/spidev0 to drive the lights
-    # Alternative configurations for different SPI buses (commented out)
-    # led = Freenove_SPI_LedPixel(8, 255, 'GRB', 0)   # Use MOSI for /dev/spidev0 to drive the lights
-    # led = Freenove_SPI_LedPixel(8, 255, 'GRB', 1)   # Use MOSI for /dev/spidev1 to drive the lights
-    try:
-        if led.check_spi_state() != 0:
-            # Set the number of LEDs to 8
-            led.set_led_count(8)
-            # Set all LEDs to red
-            led.set_all_led_color_data(255, 0, 0)
-            led.show()
-            time.sleep(0.5)
-            # Set all LEDs to green
-            led.set_all_led_rgb_data([0, 255, 0])
-            led.show()
-            time.sleep(0.5)
-            # Set all LEDs to blue
-            led.set_all_led_color(0, 0, 255)
-            time.sleep(0.5)
-            # Set all LEDs to cyan
-            led.set_all_led_rgb([0, 255, 255])
-            time.sleep(0.5)
 
-            # Set the number of LEDs to 12
-            led.set_led_count(12)
-            # Set all LEDs to yellow
-            led.set_all_led_color_data(255, 255, 0)
-            # Fade in the brightness from 0 to 255
-            for i in range(255):
-                led.set_led_brightness(i)
+    # Create LED controller instance
+    with Freenove_SPI_LedPixel(8, 255) as led:
+        try:
+            if led.check_spi_state() != 0:
+                # Set number of LEDs
+                led.set_led_count(8)
+
+                # Test basic colors
+                logger.info("Testing red...")
+                led.set_all_led_color_data(255, 0, 0)
                 led.show()
-                time.sleep(0.005)
-            # Fade out the brightness from 255 to 0
-            for i in range(255):
-                led.set_led_brightness(255 - i)
+                time.sleep(0.5)
+
+                logger.info("Testing green...")
+                led.set_all_led_rgb_data([0, 255, 0])
                 led.show()
-                time.sleep(0.005)
-                  
-            # Set the brightness to 20
-            led.set_led_brightness(20)
-            # Infinite loop to create a color wheel effect
-            while True:
-                for j in range(255):
-                    for i in range(led.led_count):
-                        # Set the color of each LED based on the color wheel
-                        led.set_led_rgb_data(i, led.wheel((round(i * 255 / led.led_count) + j) % 256))
+                time.sleep(0.5)
+
+                logger.info("Testing blue...")
+                led.set_all_led_color(0, 0, 255)
+                time.sleep(0.5)
+
+                logger.info("Testing cyan...")
+                led.set_all_led_rgb([0, 255, 255])
+                time.sleep(0.5)
+
+                # Brightness fade test
+                logger.info("Testing brightness fade...")
+                led.set_led_count(12)
+                led.set_all_led_color_data(255, 255, 0)
+
+                # Fade in
+                for i in range(255):
+                    led.set_led_brightness(i)
                     led.show()
-                    time.sleep(0.002)
-        else:
-            # Close the SPI connection if initialization failed
-            led.led_close()
-    except KeyboardInterrupt:
-        # Close the SPI connection on keyboard interrupt
-        led.led_close()
-        
-    
+                    time.sleep(0.005)
 
+                # Fade out
+                for i in range(255):
+                    led.set_led_brightness(255 - i)
+                    led.show()
+                    time.sleep(0.005)
 
+                # Color wheel animation
+                logger.info("Running color wheel animation (Ctrl+C to stop)...")
+                led.set_led_brightness(20)
 
+                while True:
+                    for j in range(255):
+                        for i in range(led.led_count):
+                            color = led.wheel(
+                                (round(i * 255 / led.led_count) + j) % 256
+                            )
+                            led.set_led_rgb_data(i, color)
+                        led.show()
+                        time.sleep(0.002)
+            else:
+                logger.error("SPI initialization failed")
 
-
+        except KeyboardInterrupt:
+            logger.info("Animation stopped by user")

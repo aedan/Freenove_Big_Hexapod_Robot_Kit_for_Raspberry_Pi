@@ -1,125 +1,307 @@
+"""
+Camera module for Freenove Hexapod Robot.
+Optimized for Pi 4 with H264 hardware encoding and improved frame handling.
+"""
+
 import time
+import io
+from threading import Condition
+from typing import Optional
+
 from picamera2 import Picamera2, Preview
-from picamera2.encoders import H264Encoder, JpegEncoder
+from picamera2.encoders import H264Encoder, Quality
 from picamera2.outputs import FileOutput
 from libcamera import Transform
-from threading import Condition
-import io
+
+from config import get_config
+from logger import get_logger
+
+logger = get_logger()
+
 
 class StreamingOutput(io.BufferedIOBase):
+    """Thread-safe video frame buffer with timeout support."""
+
     def __init__(self):
         """Initialize the StreamingOutput class."""
-        self.frame = None
-        self.condition = Condition()  # Initialize the condition variable for thread synchronization
+        self.frame: Optional[bytes] = None
+        self.condition = Condition()
 
     def write(self, buf: bytes) -> int:
-        """Write a buffer to the frame and notify all waiting threads."""
+        """
+        Write a buffer to the frame and notify all waiting threads.
+
+        Args:
+            buf: Frame data to write
+
+        Returns:
+            Number of bytes written
+        """
         with self.condition:
-            self.frame = buf             # Update the frame buffer with new data
-            self.condition.notify_all()  # Notify all waiting threads that new data is available
+            self.frame = buf
+            self.condition.notify_all()
         return len(buf)
 
-class Camera:
-    def __init__(self, preview_size: tuple = (640, 480), hflip: bool = False, vflip: bool = False, stream_size: tuple = (400, 300)):
-        """Initialize the Camera class."""
-        try:
-            self.camera = Picamera2()  # Initialize the Picamera2 object
-        except IndexError:
-            print("Error: No available camera device found.")
-            return
 
-        self.transform = Transform(hflip=1 if hflip else 0, vflip=1 if vflip else 0)  # Set the transformation for flipping the image
-        preview_config = self.camera.create_preview_configuration(main={"size": preview_size}, transform=self.transform)  # Create the preview configuration
-        self.camera.configure(preview_config)  # Configure the camera with the preview settings
-        
-        # Configure video stream
-        self.stream_size = stream_size  # Set the size of the video stream
-        self.stream_config = self.camera.create_video_configuration(main={"size": stream_size}, transform=self.transform)  # Create the video configuration
-        self.streaming_output = StreamingOutput()  # Initialize the streaming output object
-        self.streaming = False  # Initialize the streaming flag
+class Camera:
+    """
+    Camera controller for video streaming and image capture.
+    Optimized for Raspberry Pi 4 with hardware H264 encoding.
+    """
+
+    def __init__(
+        self,
+        preview_size: Optional[tuple] = None,
+        hflip: bool = False,
+        vflip: bool = False,
+        stream_size: Optional[tuple] = None
+    ):
+        """
+        Initialize the Camera class.
+
+        Args:
+            preview_size: Size for preview mode (default from config)
+            hflip: Horizontal flip
+            vflip: Vertical flip
+            stream_size: Size for video streaming (default from config)
+        """
+        self.config = get_config()
+
+        # Use config defaults if not specified
+        if preview_size is None:
+            preview_size = self.config.camera.resolution
+        if stream_size is None:
+            stream_size = self.config.camera.resolution
+
+        try:
+            self.camera = Picamera2()
+            logger.info("Camera initialized successfully")
+        except IndexError:
+            logger.error("No available camera device found")
+            raise RuntimeError("Camera initialization failed - no device found")
+
+        # Set image transformation
+        self.transform = Transform(
+            hflip=1 if hflip else 0,
+            vflip=1 if vflip else 0
+        )
+
+        # Preview configuration
+        preview_config = self.camera.create_preview_configuration(
+            main={"size": preview_size},
+            transform=self.transform
+        )
+        self.camera.configure(preview_config)
+
+        # Video stream configuration
+        self.stream_size = stream_size
+        self.stream_config = self.camera.create_video_configuration(
+            main={"size": stream_size},
+            transform=self.transform
+        )
+        self.streaming_output = StreamingOutput()
+        self.streaming = False
+        self.encoder: Optional[H264Encoder] = None
+
+        logger.info(f"Camera configured - preview: {preview_size}, stream: {stream_size}")
 
     def start_image(self) -> None:
         """Start the camera preview and capture."""
-        self.camera.start_preview(Preview.QTGL)  # Start the camera preview using the QTGL backend
-        self.camera.start()                      # Start the camera
-
-    def save_image(self, filename: str) -> dict:
-        """Capture and save an image to the specified file."""
         try:
-            metadata = self.camera.capture_file(filename)  # Capture an image and save it to the specified file
-            return metadata                              # Return the metadata of the captured image
+            self.camera.start_preview(Preview.QTGL)
+            self.camera.start()
+            logger.info("Camera preview started")
         except Exception as e:
-            print(f"Error capturing image: {e}")         # Print error message if capturing fails
-            return None                                  # Return None if capturing fails
+            logger.error(f"Failed to start camera preview: {e}")
+            raise
 
-    def start_stream(self, filename: str = None) -> None:
-        """Start the video stream or recording."""
-        if not self.streaming:
+    def save_image(self, filename: str) -> Optional[dict]:
+        """
+        Capture and save an image to the specified file.
+
+        Args:
+            filename: Output file path
+
+        Returns:
+            Image metadata or None on failure
+        """
+        try:
+            metadata = self.camera.capture_file(filename)
+            logger.info(f"Image saved to {filename}")
+            return metadata
+        except Exception as e:
+            logger.error(f"Error capturing image: {e}")
+            return None
+
+    def start_stream(self, filename: Optional[str] = None) -> None:
+        """
+        Start the video stream or recording.
+        Uses H264 hardware encoding for optimal performance on Pi 4.
+
+        Args:
+            filename: If provided, save to file; otherwise stream to buffer
+        """
+        if self.streaming:
+            logger.warning("Stream already running")
+            return
+
+        try:
+            # Stop camera if running
             if self.camera.started:
-                self.camera.stop()                         # Stop the camera if it is currently running
-            
-            self.camera.configure(self.stream_config)      # Configure the camera with the video stream settings
+                self.camera.stop()
+
+            # Configure camera for video
+            self.camera.configure(self.stream_config)
+
+            # Create H264 encoder with Pi 4 optimized settings
+            # Using H264 hardware encoder for both streaming and recording
+            self.encoder = H264Encoder(
+                bitrate=self.config.camera.bitrate,
+                # Quality preset for Pi 4 (balanced quality/performance)
+            )
+
+            # Set I-frame interval for better seeking and error recovery
+            # I-frame every 1 second (30 frames at 30fps)
+            if hasattr(self.encoder, 'intra_period'):
+                self.encoder.intra_period = self.config.camera.intra_period
+
+            # Set output
             if filename:
-                encoder = H264Encoder()                    # Use H264 encoder for video recording
-                output = FileOutput(filename)              # Set the output file for the recorded video
+                output = FileOutput(filename)
+                logger.info(f"Starting H264 video recording to {filename}")
             else:
-                encoder = JpegEncoder()                    # Use Jpeg encoder for streaming
-                output = FileOutput(self.streaming_output) # Set the streaming output object
-            self.camera.start_recording(encoder, output)   # Start recording or streaming
-            self.streaming = True                          # Set the streaming flag to True
+                output = FileOutput(self.streaming_output)
+                logger.info("Starting H264 video streaming")
+
+            # Start recording
+            self.camera.start_recording(self.encoder, output)
+            self.streaming = True
+            logger.info(
+                f"Camera streaming: {self.stream_size} @ {self.config.camera.framerate}fps, "
+                f"bitrate={self.config.camera.bitrate}"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to start camera stream: {e}")
+            self.streaming = False
+            raise
 
     def stop_stream(self) -> None:
         """Stop the video stream or recording."""
-        if self.streaming:
-            try:
-                self.camera.stop_recording()               # Stop the recording or streaming
-                self.streaming = False                     # Set the streaming flag to False
-            except Exception as e:
-                print(f"Error stopping stream: {e}")       # Print error message if stopping fails
+        if not self.streaming:
+            return
 
-    def get_frame(self) -> bytes:
-        """Get the current frame from the streaming output."""
+        try:
+            self.camera.stop_recording()
+            self.streaming = False
+            logger.info("Camera stream stopped")
+        except Exception as e:
+            logger.error(f"Error stopping stream: {e}")
+
+    def get_frame(self, timeout: float = 2.0) -> Optional[bytes]:
+        """
+        Get the current frame from the streaming output.
+
+        Args:
+            timeout: Max seconds to wait for a frame (default 2.0)
+
+        Returns:
+            Frame data or None on timeout
+        """
         with self.streaming_output.condition:
-            self.streaming_output.condition.wait()         # Wait for a new frame to be available
-            return self.streaming_output.frame             # Return the current frame
+            # Wait for frame with timeout
+            if not self.streaming_output.condition.wait(timeout=timeout):
+                logger.warning(f"Frame timeout after {timeout}s")
+                return None
+            return self.streaming_output.frame
 
     def save_video(self, filename: str, duration: int = 10) -> None:
-        """Save a video for the specified duration."""
-        self.start_stream(filename)                        # Start the video recording
-        time.sleep(duration)                               # Record for the specified duration
-        self.stop_stream()                                 # Stop the video recording
+        """
+        Save a video for the specified duration.
+
+        Args:
+            filename: Output file path
+            duration: Recording duration in seconds
+        """
+        logger.info(f"Recording video for {duration}s to {filename}")
+        self.start_stream(filename)
+        time.sleep(duration)
+        self.stop_stream()
+
+    def capture_frame(self) -> Optional['numpy.ndarray']:
+        """
+        Capture a single frame as numpy array for OpenCV processing.
+        Useful for face recognition and image analysis.
+
+        Returns:
+            BGR numpy array or None on failure
+        """
+        try:
+            import numpy as np
+
+            # Capture frame as numpy array
+            frame = self.camera.capture_array("main")
+
+            # Convert from RGB to BGR for OpenCV compatibility
+            if frame is not None and len(frame.shape) == 3:
+                # picamera2 returns RGB, OpenCV expects BGR
+                frame_bgr = np.ascontiguousarray(frame[:, :, ::-1])
+                return frame_bgr
+            else:
+                logger.warning("Invalid frame captured")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error capturing frame: {e}")
+            return None
 
     def close(self) -> None:
-        """Close the camera."""
+        """Close the camera and cleanup resources."""
+        logger.info("Closing camera")
         if self.streaming:
-            self.stop_stream()                             # Stop the streaming if it is active
-        self.camera.close()                                # Close the camera
+            self.stop_stream()
+        try:
+            self.camera.close()
+            logger.info("Camera closed")
+        except Exception as e:
+            logger.warning(f"Error closing camera: {e}")
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - cleanup resources."""
+        self.close()
+        return False
+
 
 if __name__ == '__main__':
-    print('Program is starting ... ')                    # Print a message indicating the start of the program
-    camera = Camera()                                    # Create a Camera instance
+    from logger import setup_logger
 
-    print("View image...")
-    camera.start_image()                                 # Start the camera preview
-    time.sleep(10)                                       # Wait for 10 seconds
-    
-    print("Capture image...")
-    camera.save_image(filename="image.jpg")              # Capture and save an image
-    time.sleep(1)                                        # Wait for 1 second
+    setup_logger(log_level='INFO')
 
-    '''
-    print("Stream video...")
-    camera.start_stream()                                # Start the video stream
-    time.sleep(3)                                        # Stream for 3 seconds
-    
-    print("Stop video...")
-    camera.stop_stream()                                 # Stop the video stream
-    time.sleep(1)                                        # Wait for 1 second
+    logger.info('Camera test program starting')
 
-    print("Save video...")
-    camera.save_video("video.h264", duration=3)          # Save a video for 3 seconds
-    time.sleep(1)                                        # Wait for 1 second
-    
-    print("Close camera...")
-    camera.close()                                       # Close the camera
-    '''
+    with Camera() as camera:
+        logger.info("View image...")
+        camera.start_image()
+        time.sleep(10)
+
+        logger.info("Capture image...")
+        camera.save_image(filename="image.jpg")
+        time.sleep(1)
+
+        logger.info("Stream video test...")
+        camera.start_stream()
+        time.sleep(3)
+
+        logger.info("Stop video...")
+        camera.stop_stream()
+        time.sleep(1)
+
+        logger.info("Save video test...")
+        camera.save_video("video.h264", duration=3)
+        time.sleep(1)
+
+    logger.info("Camera test complete")

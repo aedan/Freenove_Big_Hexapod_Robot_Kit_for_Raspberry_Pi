@@ -10,6 +10,8 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from Client import *
 from Calibration import *
+from Autonomous import AutonomousWindow
+from RobotSelector import RobotSelectorDialog
 class MyWindow(QMainWindow,Ui_client):
     def __init__(self):
         super(MyWindow,self).__init__()
@@ -41,6 +43,26 @@ class MyWindow(QMainWindow,Ui_client):
         self.Button_Relax.clicked.connect(self.relax)
         self.Button_Buzzer.pressed.connect(self.buzzer)
         self.Button_Buzzer.released.connect(self.buzzer)
+
+        # Add Autonomous button programmatically (if not in UI already)
+        try:
+            self.Button_Autonomous.clicked.connect(self.showAutonomousWindow)
+        except AttributeError:
+            # Button doesn't exist in UI, create it programmatically
+            self.Button_Autonomous = QPushButton("🤖 Autonomous", self)
+            self.Button_Autonomous.setGeometry(QtCore.QRect(20, 470, 150, 35))
+            self.Button_Autonomous.setStyleSheet("font: 10pt \"Arial\";")
+            self.Button_Autonomous.clicked.connect(self.showAutonomousWindow)
+
+        # Add Robot Scan button programmatically (if not in UI already)
+        try:
+            self.Button_Scan_Robots.clicked.connect(self.showRobotSelector)
+        except AttributeError:
+            # Button doesn't exist in UI, create it programmatically
+            self.Button_Scan_Robots = QPushButton("🔍 Find Robots", self)
+            self.Button_Scan_Robots.setGeometry(QtCore.QRect(20, 515, 150, 35))
+            self.Button_Scan_Robots.setStyleSheet("font: 10pt \"Arial\";")
+            self.Button_Scan_Robots.clicked.connect(self.showRobotSelector)
 
         #Slider
         self.slider_head.setMinimum(50)
@@ -671,6 +693,45 @@ class MyWindow(QMainWindow,Ui_client):
             self.client.fece_id = True
         except Exception as e:
             print(e)
+
+    # Autonomous Control
+    def showAutonomousWindow(self):
+        """Show autonomous control window."""
+        try:
+            self.autonomousWindow = AutonomousWindow(self.client)
+            self.autonomousWindow.setWindowModality(Qt.ApplicationModal)
+            self.autonomousWindow.show()
+        except Exception as e:
+            print(e)
+
+    # Robot Selector
+    def showRobotSelector(self):
+        """Show robot selector dialog to scan and select robot."""
+        try:
+            selector = RobotSelectorDialog(self)
+            if selector.exec_() == QDialog.Accepted:
+                robot = selector.get_selected_robot()
+                if robot:
+                    # Update IP address field with selected robot
+                    self.lineEdit_IP_Adress.setText(robot['ip'])
+
+                    # Save to IP.txt
+                    with open('IP.txt', 'w') as f:
+                        f.write(robot['ip'])
+
+                    # Show confirmation
+                    QMessageBox.information(
+                        self,
+                        "Robot Selected",
+                        f"Selected: {robot['name']}\nIP: {robot['ip']}\n\nClick 'Connect' to connect."
+                    )
+        except Exception as e:
+            print(f"Error in robot selector: {e}")
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Failed to open robot selector: {e}"
+            )
 
     def refresh_image(self):
         if self.client.video_flag == False:
