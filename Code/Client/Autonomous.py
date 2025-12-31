@@ -193,19 +193,19 @@ class AutonomousWindow(QDialog):
 
     def start_exploring(self):
         """Start exploration mode."""
-        self.client.send_data(cmd.CMD_START_EXPLORING)
+        self.client.send_data(cmd.CMD_START_EXPLORING + '\n')
         self.status_label.setText("Status: Exploring 🔍")
         self.log_message("Started exploration mode - robot is wandering and learning!")
 
     def start_patrol(self):
         """Start patrol mode."""
-        self.client.send_data(cmd.CMD_START_PATROL)
+        self.client.send_data(cmd.CMD_START_PATROL + '\n')
         self.status_label.setText("Status: Patrolling 🚨")
         self.log_message("Started patrol mode - watching for intruders!")
 
     def stop_autonomous(self):
         """Stop autonomous operation."""
-        self.client.send_data(cmd.CMD_STOP_AUTONOMOUS)
+        self.client.send_data(cmd.CMD_STOP_AUTONOMOUS + '\n')
         self.status_label.setText("Status: Idle")
         self.log_message("Stopped autonomous operation")
 
@@ -220,7 +220,7 @@ class AutonomousWindow(QDialog):
         )
 
         if ok and name:
-            command = f"{cmd.CMD_CAPTURE_FACE_SAMPLE}#{name}"
+            command = f"{cmd.CMD_CAPTURE_FACE_SAMPLE}#{name}\n"
             self.client.send_data(command)
             self.log_message(f"Captured face sample for '{name}'")
             self.log_message("Tip: Capture 5-10 samples from different angles!")
@@ -238,12 +238,12 @@ class AutonomousWindow(QDialog):
         )
 
         if reply == QMessageBox.Yes:
-            self.client.send_data(cmd.CMD_TRAIN_FACES)
+            self.client.send_data(cmd.CMD_TRAIN_FACES + '\n')
             self.log_message("Training face recognizer... (may take a few seconds)")
 
     def list_known_faces(self):
         """Request list of known faces from server."""
-        self.client.send_data(cmd.CMD_LIST_KNOWN_FACES)
+        self.client.send_data(cmd.CMD_LIST_KNOWN_FACES + '\n')
         self.log_message("Requested known faces list (check server logs)")
 
     def add_waypoint(self, direction):
@@ -259,7 +259,7 @@ class AutonomousWindow(QDialog):
             waypoint_cmd = "CMD_MOVE#0#50#0#0#tripod"
             self.log_message("Added waypoint: Turn Right")
 
-        command = f"{cmd.CMD_ADD_PATROL_WAYPOINT}#{waypoint_cmd}"
+        command = f"{cmd.CMD_ADD_PATROL_WAYPOINT}#{waypoint_cmd}\n"
         self.client.send_data(command)
 
     def auto_calibrate(self):
@@ -274,7 +274,7 @@ class AutonomousWindow(QDialog):
         )
 
         if reply == QMessageBox.Yes:
-            self.client.send_data(cmd.CMD_AUTO_CALIBRATE)
+            self.client.send_data(cmd.CMD_AUTO_CALIBRATE + '\n')
             self.log_message("Auto-calibration started...")
 
     def set_height(self):
@@ -289,7 +289,7 @@ class AutonomousWindow(QDialog):
                 )
                 return
 
-            command = f"{cmd.CMD_SET_HEIGHT}#{height}"
+            command = f"{cmd.CMD_SET_HEIGHT}#{height}\n"
             self.client.send_data(command)
             self.log_message(f"Setting height to {height} inches...")
         except ValueError:

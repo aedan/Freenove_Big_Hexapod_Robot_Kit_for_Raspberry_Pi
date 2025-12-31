@@ -1,6 +1,6 @@
 """
 Camera module for Freenove Hexapod Robot.
-Optimized for Pi 4 with H264 hardware encoding and improved frame handling.
+Uses MJPEG for streaming (client compatibility) and H264 for file recording.
 """
 
 import time
@@ -9,7 +9,7 @@ from threading import Condition
 from typing import Optional
 
 from picamera2 import Picamera2, Preview
-from picamera2.encoders import H264Encoder, Quality
+from picamera2.encoders import H264Encoder, MJPEGEncoder, Quality
 from picamera2.outputs import FileOutput
 from libcamera import Transform
 
@@ -46,7 +46,7 @@ class StreamingOutput(io.BufferedIOBase):
 class Camera:
     """
     Camera controller for video streaming and image capture.
-    Optimized for Raspberry Pi 4 with hardware H264 encoding.
+    Uses MJPEG encoding for streaming, H264 for file recording.
     """
 
     def __init__(
@@ -136,7 +136,7 @@ class Camera:
     def start_stream(self, filename: Optional[str] = None) -> None:
         """
         Start the video stream or recording.
-        Uses H264 hardware encoding for optimal performance on Pi 4.
+        Uses MJPEG for streaming (client compatibility) and H264 for file recording.
 
         Args:
             filename: If provided, save to file; otherwise stream to buffer
@@ -153,25 +153,25 @@ class Camera:
             # Configure camera for video
             self.camera.configure(self.stream_config)
 
-            # Create H264 encoder with Pi 4 optimized settings
-            # Using H264 hardware encoder for both streaming and recording
-            self.encoder = H264Encoder(
-                bitrate=self.config.camera.bitrate,
-                # Quality preset for Pi 4 (balanced quality/performance)
-            )
-
-            # Set I-frame interval for better seeking and error recovery
-            # I-frame every 1 second (30 frames at 30fps)
-            if hasattr(self.encoder, 'intra_period'):
-                self.encoder.intra_period = self.config.camera.intra_period
-
-            # Set output
+            # Set output and encoder based on use case
             if filename:
+                # Use H264 for file recording (better compression)
+                self.encoder = H264Encoder(
+                    bitrate=self.config.camera.bitrate,
+                )
+                # Set I-frame interval for better seeking
+                if hasattr(self.encoder, 'intra_period'):
+                    self.encoder.intra_period = self.config.camera.intra_period
+
                 output = FileOutput(filename)
                 logger.info(f"Starting H264 video recording to {filename}")
             else:
+                # Use MJPEG for streaming (client expects JPEG frames)
+                self.encoder = MJPEGEncoder(
+                    bitrate=self.config.camera.bitrate,
+                )
                 output = FileOutput(self.streaming_output)
-                logger.info("Starting H264 video streaming")
+                logger.info("Starting MJPEG video streaming")
 
             # Start recording
             self.camera.start_recording(self.encoder, output)

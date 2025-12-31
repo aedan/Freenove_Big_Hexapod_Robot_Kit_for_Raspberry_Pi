@@ -50,7 +50,7 @@ class MyWindow(QMainWindow,Ui_client):
         except AttributeError:
             # Button doesn't exist in UI, create it programmatically
             self.Button_Autonomous = QPushButton("🤖 Autonomous", self)
-            self.Button_Autonomous.setGeometry(QtCore.QRect(20, 470, 150, 35))
+            self.Button_Autonomous.setGeometry(QtCore.QRect(160, 510, 110, 30))
             self.Button_Autonomous.setStyleSheet("font: 10pt \"Arial\";")
             self.Button_Autonomous.clicked.connect(self.showAutonomousWindow)
 
@@ -60,7 +60,7 @@ class MyWindow(QMainWindow,Ui_client):
         except AttributeError:
             # Button doesn't exist in UI, create it programmatically
             self.Button_Scan_Robots = QPushButton("🔍 Find Robots", self)
-            self.Button_Scan_Robots.setGeometry(QtCore.QRect(20, 515, 150, 35))
+            self.Button_Scan_Robots.setGeometry(QtCore.QRect(280, 510, 110, 30))
             self.Button_Scan_Robots.setStyleSheet("font: 10pt \"Arial\";")
             self.Button_Scan_Robots.clicked.connect(self.showRobotSelector)
 
